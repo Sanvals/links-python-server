@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
+from flask_socketio import SocketIO
 import os
 import requests
 
@@ -10,11 +11,13 @@ DATABASE_ID = os.getenv("DATABASE_ID")
 # Run flask app
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # State variables
 current_url = ""
 current_data = {}
 valid_urls = []
+connected_users = 0
 headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
@@ -114,6 +117,8 @@ def set_url(url):
     else:
         current_url = url
         print(f"URL set to: {current_url}")  # Debugging output
+
+        socketio.emit('new_url', {'url': current_url})
         return jsonify({"message": "URL set", "url": current_url})
 
 
@@ -130,5 +135,16 @@ def empty_url():
     return jsonify({"message": "Link emptied"})
 
 
+@socketio.on('connect')
+def handle_connect():
+    socketio.emit('new_url', {'url': current_url})
+    print('Client connected')
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Client disconnected')
+
+
 if __name__ == '__main__':
-    app.run()
+    socketio.run(app, debug=True)
