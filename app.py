@@ -1,23 +1,28 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
-from flask_socketio import SocketIO
 import os
 import requests
+from datetime import datetime
+
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from oauth2client.service_account import ServiceAccountCredentials
 
 # Environment variables
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = os.getenv("DATABASE_ID")
+GOOGLE_API = os.getenv("GOOGLE_API")
+CLIENT_ID = os.getenv("CLIENT_ID")
+CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 
 # Run flask app
 app = Flask(__name__)
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*")
 
 # State variables
 current_url = ""
 current_data = {}
 valid_urls = []
-connected_users = 0
 headers = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
@@ -56,7 +61,6 @@ def fetch_pages():
         has_more = data.get("has_more", False)
         start_cursor = data.get("next_cursor", None)
 
-    # print(f"Total items fetched: {len(results)}")
     return results
 
 
@@ -118,7 +122,7 @@ def set_url(url):
         current_url = url
         print(f"URL set to: {current_url}")  # Debugging output
 
-        socketio.emit('new_url', {'url': current_url})
+        # socketio.emit('new_url', {'url': current_url})
         return jsonify({"message": "URL set", "url": current_url})
 
 
@@ -135,16 +139,74 @@ def empty_url():
     return jsonify({"message": "Link emptied"})
 
 
-@socketio.on('connect')
-def handle_connect():
-    socketio.emit('new_url', {'url': current_url})
-    print('Client connected')
+class createService:
+    def __init__(self):
+        self._SCOPES = ['https://www.googleapis.com/auth/drive']
+        _base_path = os.path.dirname(__file__)
+        # Make sure to adjust the file path correctly
+        self._credential_path = os.path.join(_base_path, 'credential.json')
+
+    def build(self):
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            self._credential_path, self._SCOPES
+        )
+        service = build('drive', 'v3', credentials=creds)
+        return service
 
 
-@socketio.on('disconnect')
-def handle_disconnect():
-    print('Client disconnected')
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({"message": "No file uploaded"}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"message": "File without title"}), 400
+
+    # Save file temporarily
+    temp_file_path = f"./uploads/{file.filename}"
+
+    try:
+        # Save the file temporarily and close it
+        with open(temp_file_path, 'wb') as temp_file:
+            file.save(temp_file)
+        print(f"File saved to: {temp_file_path}")
+    except Exception as e:
+        print(f"Error saving file: {e}")
+        return jsonify({"message": "Error saving file"}), 500
+
+    # Create Drive service
+    drive_service = createService().build()
+
+    # Prepare media for upload
+    media_body = MediaFileUpload(temp_file_path,
+                                 mimetype=file.mimetype,
+                                 resumable=True)
+
+    created_at = datetime.now().strftime("%Y%m%d%H%M%S")
+    file_metadata = {
+        "name": f"{file.filename} ({created_at})",
+        "parents": ["1cGpjpegdBEq8VX2SBP7aW8CJQzVZuY-h"]
+    }
+
+    returned_fields = "id, name, mimeType, webViewLink, exportLinks"
+
+    try:
+        # Upload the file
+        upload_response = drive_service.files().create(
+            body=file_metadata,
+            media_body=media_body,
+            fields=returned_fields
+        ).execute()
+        print(upload_response)
+
+        return jsonify(upload_response)
+
+    except Exception as e:
+        print(f"Error uploading file: {e}")
+
+        return jsonify({"message": "Error uploading file"}), 500
 
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True)
+    app.run()
