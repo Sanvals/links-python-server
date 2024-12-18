@@ -1,11 +1,12 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from io import BytesIO
 import os
 import requests
 from datetime import datetime
 
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaIoBaseUpload
 from oauth2client.service_account import ServiceAccountCredentials
 
 # Environment variables
@@ -163,25 +164,19 @@ def upload_file():
     if file.filename == '':
         return jsonify({"message": "File without title"}), 400
 
-    # Save file temporarily
-    temp_file_path = f"./uploads/{file.filename}"
-
-    try:
-        # Save the file temporarily and close it
-        with open(temp_file_path, 'wb') as temp_file:
-            file.save(temp_file)
-        print(f"File saved to: {temp_file_path}")
-    except Exception as e:
-        print(f"Error saving file: {e}")
-        return jsonify({"message": "Error saving file"}), 500
+    # Load file content into memory
+    file_content = BytesIO(file.read())
+    file_content.seek(0)  # Reset pointer to the start of the file
 
     # Create Drive service
     drive_service = createService().build()
 
     # Prepare media for upload
-    media_body = MediaFileUpload(temp_file_path,
-                                 mimetype=file.mimetype,
-                                 resumable=True)
+    media_body = MediaIoBaseUpload(
+        file_content,
+        mimetype=file.mimetype,
+        resumable=True
+        )
 
     created_at = datetime.now().strftime("%Y%m%d%H%M%S")
     file_metadata = {
@@ -192,7 +187,7 @@ def upload_file():
     returned_fields = "id, name, mimeType, webViewLink, exportLinks"
 
     try:
-        # Upload the file
+        # Upload the file to Google Drive
         upload_response = drive_service.files().create(
             body=file_metadata,
             media_body=media_body,
